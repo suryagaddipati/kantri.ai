@@ -1,40 +1,48 @@
 import contextlib
 import io
+import json
 import sys
 import pdfplumber
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 
-def extract_text_from_pdf(pdf_path: str) -> str:
-    text = ""
+def sanitize_for_json(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        return {k: sanitize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_for_json(item) for item in obj]
+    elif isinstance(obj, (str, int, float, bool, type(None))):
+        return obj
+    else:
+        return str(obj)
+
+
+def extract_raw_data(pdf_path: str, page_number: Optional[int] = None) -> dict:
+    data: dict = {"pages": []}
     with contextlib.redirect_stderr(io.StringIO()):
         with pdfplumber.open(pdf_path) as pdf:
-            for page in pdf.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
-    return text
+            pages = [pdf.pages[page_number - 1]] if page_number else pdf.pages
+            for page in pages:
+                page_data = {
+                    "page_number": page.page_number,
+                    "width": page.width,
+                    "height": page.height,
+                    "chars": sanitize_for_json(page.chars),
+                    "lines": sanitize_for_json(page.lines),
+                    "rects": sanitize_for_json(page.rects),
+                    "curves": sanitize_for_json(page.curves),
+                    "images": sanitize_for_json(page.images),
+                    "annots": sanitize_for_json(page.annots),
+                    "hyperlinks": sanitize_for_json(page.hyperlinks),
+                }
+                data["pages"].append(page_data)
+    return data
 
 
-def extract_tables_from_pdf(pdf_path: str) -> list:
-    tables = []
-    with contextlib.redirect_stderr(io.StringIO()):
-        with pdfplumber.open(pdf_path) as pdf:
-            for page_num, page in enumerate(pdf.pages):
-                page_tables = page.extract_tables()
-                if page_tables:
-                    for table in page_tables:
-                        tables.append({
-                            'page': page_num + 1,
-                            'data': table
-                        })
-    return tables
-
-
-def main(pdf_path: Optional[str] = None):
+def main(pdf_path: Optional[str] = None, page_number: Optional[int] = None):
     if not pdf_path:
-        print("Usage: python main.py <path_to_pdf>")
+        print("Usage: python main.py <path_to_pdf> [page_number]")
         return
 
     pdf_file = Path(pdf_path)
@@ -42,24 +50,12 @@ def main(pdf_path: Optional[str] = None):
         print(f"Error: File '{pdf_path}' not found")
         return
 
-    print(f"Extracting data from: {pdf_path}\n")
-
-    text = extract_text_from_pdf(pdf_path)
-    print("=== Extracted Text ===")
-    print(text)
-
-    tables = extract_tables_from_pdf(pdf_path)
-    if tables:
-        print(f"\n=== Extracted Tables ({len(tables)} found) ===")
-        for i, table_info in enumerate(tables):
-            print(f"\nTable {i+1} (Page {table_info['page']}):")
-            for row in table_info['data']:
-                print(row)
-    else:
-        print("\nNo tables found in PDF")
+    data = extract_raw_data(pdf_path, page_number)
+    print(json.dumps(data, indent=2))
 
 
 if __name__ == "__main__":
     import sys
     pdf_path = sys.argv[1] if len(sys.argv) > 1 else None
-    main(pdf_path)
+    page_number = int(sys.argv[2]) if len(sys.argv) > 2 else None
+    main(pdf_path, page_number)
